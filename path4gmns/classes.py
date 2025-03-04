@@ -6,7 +6,7 @@ from math import ceil, floor
 from random import choice, randint
 
 from .consts import EPSILON, MAX_LABEL_COST, SECONDS_IN_MINUTE, SECONDS_IN_HOUR
-from .path import find_path_for_agents, find_shortest_path, \
+from .path import find_path_for_agents, find_shortest_path, find_shortest_path_distance,find_shortest_path_network, \
                   single_source_shortest_path, benchmark_apsp
 
 
@@ -1512,6 +1512,28 @@ class Assignment:
 
         return find_shortest_path(self.network, from_node_id,
                                   to_node_id, seq_type)
+        
+    def find_shortest_path_distance(self, from_node_id, to_node_id):
+        """ call find_shortest_path_distance() from path.py
+
+        exceptions will be handled in find_shortest_path_distance()
+        """
+        # add backward compatibility in case the user still use integer node id's
+        from_node_id = str(from_node_id)
+        to_node_id = str(to_node_id)
+
+        return find_shortest_path_distance(self.network, from_node_id,
+                                  to_node_id)
+        
+    def find_shortest_path_network(self, output_dir, output_type):
+        """ call find_shortest_path_network() from path.py
+
+        exceptions will be handled in find_shortest_path_netowrk()
+        """
+
+        return find_shortest_path_network(self.network, 
+                                          output_dir,  
+                                          output_type)
 
     def benchmark_apsp(self):
         benchmark_apsp(self.network)
@@ -1835,7 +1857,62 @@ class UI:
             mode,
             seq_type
         )
+        
+    def find_shortest_path_distance(self, from_node_id, to_node_id,
+                                ):
+        """ return shortest path network between all nodes
 
+        Parameters
+        ----------
+        from_node_id
+            the starting node id, which shall be a string
+
+        to_node_id
+            the ending node id, which shall be a string
+
+        Returns
+        -------
+        int
+            the shortest path between from_node_id and to_node_id, as a int in miles
+
+        Note
+        ----
+            Exceptions will be thrown if either of from_node_id and and to_node_id
+            is not valid node IDs.
+        """
+        return self._base_assignment.find_shortest_path_distance(
+            from_node_id,
+            to_node_id,
+        )
+
+    def find_shortest_path_network(self, output_dir, output_type):
+        """ return shortest path network between all nodes
+
+        Parameters
+        ----------
+
+        output_dir
+            The filepath where the skim should be saved
+            
+        output_type
+            Choose between ".csv", ".omx", or ".zip" file formate
+            
+        Returns
+        -------
+        file
+            Network skim, in minutes, between every node in the network, 
+            in file type specified by output_type
+
+        Note
+        ----
+            Exceptions will be thrown if either of from_node_id and and to_node_id
+            is not valid node IDs.
+        """
+        return self._base_assignment.find_shortest_path_network( 
+            output_dir,  
+            output_type
+        )
+        
     def get_accessible_nodes(self,
                              source_node_id,
                              time_budget,
