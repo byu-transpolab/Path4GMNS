@@ -1,12 +1,13 @@
 import csv
 import os
 import warnings
+import openmatrix as omx
 
 from .classes import Node, Link, Zone, Network, Column, ColumnVec, VDFPeriod, \
                      AgentType, DemandPeriod, Demand, SpecialEvent, Assignment, UI
 
 from .colgen import update_links_using_columns
-from .consts import EPSILON, MILE_TO_METER, MPH_TO_KPH
+from .consts import EPSILON, MILE_TO_METER, MPH_TO_KPH, PED_SPEED_CON, BIKE_SPEED_CON
 from .utils import InvalidRecord, _are_od_connected, _convert_boundaries, \
                    _convert_str_to_float, _convert_str_to_int, _get_time_stamp, \
                    _update_dest_zone, _update_orig_zone
@@ -15,6 +16,7 @@ from .zonesyn import network_to_zones
 
 __all__ = [
     'read_network',
+    'run_skim_network',
     'read_demand',
     'read_measurements',
     'load_demand',
@@ -29,6 +31,7 @@ __all__ = [
 
 
 def read_nodes(input_dir,
+               mode,
                nodes,
                map_id_to_no,
                map_no_to_id,
@@ -69,7 +72,12 @@ def read_nodes(input_dir,
                 pass
 
             # construct node object
-            node = Node(node_no, node_id, zone_id, coord_x, coord_y, is_activity_node)
+            node = Node(node_no, 
+                        node_id, 
+                        zone_id, 
+                        coord_x, 
+                        coord_y, 
+                        is_activity_node)
             nodes.append(node)
 
             # set up mapping between node_no and node_id
@@ -109,6 +117,7 @@ def read_nodes(input_dir,
 
 
 def read_links(input_dir,
+               mode,
                links,
                nodes,
                map_id_to_no,
@@ -120,12 +129,29 @@ def read_links(input_dir,
     """ step 2: read input_link """
     with open(input_dir+'/link.csv', 'r') as fp:
         print('read link.csv')
-
+        
         reader = csv.DictReader(fp)
         link_no = 0
         # a temporary container (set) to validate the uniqueness of a link id
         link_ids_ = set()
         for line in reader:
+            # Get allowed_uses, set to 'all' if missing
+            try:
+                allowed_uses = line['allowed_uses']
+                if not allowed_uses:
+                    raise InvalidRecord
+            except (KeyError, InvalidRecord):
+                allowed_uses = 'all'
+
+            # Skip the line if mode character is not in allowed_uses
+            # This will create a network that has links that can only use that allowed use.
+            if mode not in allowed_uses:
+                # Allow "t" mode if "p" is in allowed_uses
+                if mode == "t" and "p" in allowed_uses:
+                    pass  # Continue processing this case, so that p links are in the transit network.
+                else:
+                    continue
+            
             # link id shall be unique
             link_id = line['link_id']
             # binary search shall be fast enough
@@ -190,18 +216,6 @@ def read_links(input_dir,
                 toll = _convert_str_to_float(line['toll'])
             except (KeyError, InvalidRecord):
                 toll = 0
-
-            # if link.csv does not have no column 'allowed_uses',
-            # set allowed_uses to 'all'
-            # developer's note:
-            # we may need to change this implementation as we cannot deal with
-            # cases a link which is not open to any modes
-            try:
-                allowed_uses = line['allowed_uses']
-                if not allowed_uses:
-                    raise InvalidRecord
-            except (KeyError, InvalidRecord):
-                allowed_uses = 'all'
 
             # if link.csv does not have no column 'geometry',
             # set geometry to ''
@@ -285,7 +299,13 @@ def read_links(input_dir,
                     VDF_fftt = _convert_str_to_float(line[header_vdf_fftt])
                 except (KeyError, InvalidRecord):
                     # set it up using length and free_speed from link
-                    VDF_fftt = length / max(EPSILON, free_speed) * 60
+                    #Convert Length from distance to time (minutes)
+                    if mode == "all" or "c":
+                        VDF_fftt = length / max(EPSILON, free_speed) * 60 
+                    elif mode == "p":
+                        VDF_fftt = (length * 5280)/(PED_SPEED_CON * 60)
+                    elif mode == "b":
+                        VDF_fftt = length / BIKE_SPEED_CON * 60
 
                 try:
                     VDF_cap = _convert_str_to_float(line[header_vdf_cap])
@@ -581,10 +601,46 @@ def _auto_setup(assignment):
     assignment.update_demands(d)
 
 
+def create_settings(input_dir):
+    import yaml as ym
+    file_path = os.path.join(input_dir, "settings.yml")
+    csv_path = os.path.join(input_dir, "use_group.csv")
+    
+    if os.path.exists(file_path):
+        print(f"settings.yml found")
+        return
+    
+    print(f"settings.yml missing from input_dir. Creating setting.yml")
+    settings = {"agents": []}
+    
+    with open(csv_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            agent = {
+                "type": row["mode"],
+                "name": row["description"],
+                "description": row["type"],
+                "vot": 1.0,                 # Placeholder
+                "flow_type": "standard",    # Placeholder
+                "pce": 1.0,                 # Placeholder
+                "free_speed": row["free_speed_constant"],   
+                "use_link_ffs": True        # Default setting
+            }
+            settings["agents"].append(agent)
+    
+    with open(file_path, "w") as file:
+        ym.dump(settings, file, default_flow_style=False)
+    
+    print(f"Settings.yml created successfully.")
+
+
 def read_settings(input_dir, assignment):
+    
     try:
         import yaml as ym
-
+        
+        create_settings(input_dir) #Create setting file using use_group is none already exists. 
+        
         with open(input_dir+'/settings.yml') as file:
             print('read settings.yml\n')
 
@@ -624,51 +680,54 @@ def read_settings(input_dir, assignment):
             # add the default mode if it does not exist
             if AgentType.get_default_type_str() not in assignment.map_atstr_id:
                 assignment.update_agent_types(AgentType())
-
+       
             # demand periods
-            demand_periods = settings['demand_periods']
-            for i, d in enumerate(demand_periods):
-                period = d['period']
-                time_period = d['time_period']
+            if 'demand_periods' in settings:
+                demand_periods = settings['demand_periods']
+                for i, d in enumerate(demand_periods):
+                    period = d['period']
+                    time_period = d['time_period']
 
-                dp = DemandPeriod(i, period, time_period)
-                # special event
-                try:
-                    s = d['special_event']
-                    enable = s['enable']
-                    # no need to set up a special event if it is off
-                    if not enable:
-                        raise KeyError
+                    dp = DemandPeriod(i, period, time_period)
+                    # special event
+                    try:
+                        s = d['special_event']
+                        enable = s['enable']
+                        # no need to set up a special event if it is off
+                        if not enable:
+                            raise KeyError
 
-                    name = s['name']
-                    se = SpecialEvent(name)
+                        name = s['name']
+                        se = SpecialEvent(name)
 
-                    links = s['affected_links']
-                    for link in links:
-                        link_id = str(link['link_id'])
-                        ratio = link['capacity_ratio']
-                        se.affected_links[link_id] = ratio
+                        links = s['affected_links']
+                        for link in links:
+                            link_id = str(link['link_id'])
+                            ratio = link['capacity_ratio']
+                            se.affected_links[link_id] = ratio
 
-                    dp.special_event = se
-                except KeyError:
-                    pass
+                        dp.special_event = se
+                    except KeyError:
+                        pass
 
-                assignment.update_demand_periods(dp)
+                    assignment.update_demand_periods(dp)
 
             # demand files
-            demands = settings['demand_files']
-            for i, d in enumerate(demands):
-                demand_file = d['file_name']
-                demand_period = d['period']
-                demand_type = d['agent_type']
+            if 'demand_files' in settings:
+                demands = settings['demand_files']
+                for i, d in enumerate(demands):
+                    demand_file = d['file_name']
+                    demand_period = d['period']
+                    demand_type = d['agent_type']
 
-                if demand_type not in assignment.map_atstr_id:
-                    raise Exception(
-                        f'{demand_type} is not found as an entry of agents in settings.yml'
-                    )
+                    if demand_type not in assignment.map_atstr_id:
+                        raise Exception(
+                            f'{demand_type} is not found as an entry of agents in settings.yml'
+                        )
 
-                demand = Demand(i, demand_period, demand_type, demand_file)
-                assignment.update_demands(demand)
+                    demand = Demand(i, demand_period, demand_type, demand_file)
+                    assignment.update_demands(demand)
+
 
             # simulation setup
             try:
@@ -707,10 +766,10 @@ def read_settings(input_dir, assignment):
         raise e
 
 
-def read_network(length_unit='mile', speed_unit='mph', input_dir='.'):
+def read_network(length_unit='mile', speed_unit='mph', input_dir='.', mode="all"):
     len_units = ['kilometer', 'km', 'meter', 'm', 'mile', 'mi']
     spd_units = ['kmh', 'kph', 'mph']
-
+    
     # length and speed units check
     # linear search is OK for such small lists
     if length_unit not in len_units:
@@ -729,10 +788,11 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.'):
 
     assignm = Assignment()
     network = Network()
-
+    
     read_settings(input_dir, assignm)
-
+    
     read_nodes(input_dir,
+               mode,
                network.nodes,
                network.map_id_to_no,
                network.map_no_to_id,
@@ -740,6 +800,7 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.'):
                load_demand)
 
     read_links(input_dir,
+               mode,
                network.links,
                network.nodes,
                network.map_id_to_no,
@@ -750,10 +811,81 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.'):
                load_demand)
 
     network.update()
-    assignm.network = network
+    assignm.network = network  ######## Assigning of the network
 
     return UI(assignm)
 
+def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= "time",output_type = ".omx"):
+    assignm = Assignment()
+    read_settings(input_dir, assignm) #Creates agents for Use_group file
+    
+    # Removes existing omx matrix 
+    omx_output_path = f"skims/shortest_path_matrix_{cost_type}.omx"
+    if output_type == ".omx" and os.path.exists(omx_output_path):
+        os.remove(omx_output_path)
+        print(f"Existing OMX file '{omx_output_path}' deleted. New one will be created")
+    
+    for i in range(len(assignm.agent_types)-1): # -1 removed auto added "auto" type
+        
+        mode = assignm.agent_types[i]
+        
+        print("----------------")
+        print("Running skim for mode: " + mode.name)
+        print("----------------")
+        
+        #read_network(length_unit, speed_unit, input_dir, mode)
+        len_units = ['kilometer', 'km', 'meter', 'm', 'mile', 'mi']
+        spd_units = ['kmh', 'kph', 'mph']
+    
+        # length and speed units check
+        # linear search is OK for such small lists
+        if length_unit not in len_units:
+            units = ', '.join(len_units)
+            raise Exception(
+                f'Invalid length unit: {length_unit} !'
+                f' Please choose one available unit from {units}'
+        )
+
+        if speed_unit not in spd_units:
+            units = ', '.join(spd_units)
+            raise Exception(
+                f'Invalid speed unit: {speed_unit} !'
+                f' Please choose one available unit from {units}'
+        )
+
+        assignm = Assignment()
+        network = Network()
+    
+        read_settings(input_dir, assignm)
+    
+        read_nodes(input_dir,
+                mode.type,
+                network.nodes,
+                network.map_id_to_no,
+                network.map_no_to_id,
+                network.zones,
+                load_demand)
+
+        read_links(input_dir,
+                mode.type,
+                network.links,
+                network.nodes,
+                network.map_id_to_no,
+                network.link_ids,
+                assignm.get_demand_period_count(),
+                length_unit,
+                speed_unit,
+                load_demand)
+
+        network.update()
+        assignm.network = network 
+        UI(assignm).find_shortest_path_network(output_dir, output_type, cost_type, mode)
+        
+    if output_type == ".omx":
+        with omx.open_file(omx_output_path, "r") as f:
+            print(f"The following matricies were created and stored in {omx_output_path}")
+            print(f.list_matrices())
+    
 
 def load_columns(ui, input_dir='.'):
     with open(input_dir+'/route_assignment.csv', 'r') as f:
