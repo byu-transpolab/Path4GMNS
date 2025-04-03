@@ -146,7 +146,6 @@ def read_links(input_dir,
             # Skip the line if mode character is not in allowed_uses
             # This will create a network that has links that can only use that allowed use.
             if mode not in allowed_uses:
-                # Allow "t" mode if "p" is in allowed_uses
                 if mode == "t" and "p" in allowed_uses:
                     pass  # Continue processing this case, so that p links are in the transit network.
                 else:
@@ -815,9 +814,11 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.', mode="all"
 
     return UI(assignm)
 
-def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= "time",output_type = ".omx"):
+def run_skim_network(length_unit='mile', speed_unit = 'mph', network_dir = '.', output_dir = 'skims', cost_type= "time",output_type = ".omx"):
     assignm = Assignment()
-    read_settings(input_dir, assignm) #Creates agents for Use_group file
+    
+    #Create mode agents for use_group file
+    read_settings(network_dir, assignm) 
     
     # Removes existing omx matrix 
     omx_output_path = f"skims/shortest_path_matrix_{cost_type}.omx"
@@ -825,8 +826,10 @@ def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= 
         os.remove(omx_output_path)
         print(f"Existing OMX file '{omx_output_path}' deleted. New one will be created")
     
-    for i in range(len(assignm.agent_types)-1): # -1 removed auto added "auto" type
+    # Computes network skim for every mode given in use_group file
+    for i in range(len(assignm.agent_types)-1): # -1 removed automatically added "auto" type
         
+        #Pass on current mode data
         mode = assignm.agent_types[i]
         
         print("----------------")
@@ -855,10 +858,11 @@ def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= 
 
         assignm = Assignment()
         network = Network()
-    
-        read_settings(input_dir, assignm)
-    
-        read_nodes(input_dir,
+
+        read_settings(network_dir, assignm)
+        
+        #Read in all nodes in network    
+        read_nodes(network_dir,
                 mode.type,
                 network.nodes,
                 network.map_id_to_no,
@@ -866,7 +870,8 @@ def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= 
                 network.zones,
                 load_demand)
 
-        read_links(input_dir,
+        # Read in links in the network, removing links that can not use current mode
+        read_links(network_dir,
                 mode.type,
                 network.links,
                 network.nodes,
@@ -877,10 +882,14 @@ def run_skim_network(length_unit, speed_unit, input_dir, output_dir, cost_type= 
                 speed_unit,
                 load_demand)
 
+        #Save changes to network
         network.update()
         assignm.network = network 
-        UI(assignm).find_shortest_path_network(output_dir, output_type, cost_type, mode)
         
+        # Call function from path.py to compute network skim
+        UI(assignm).find_shortest_path_network(output_dir, output_type, cost_type, mode)
+    
+    #Returns list of created matricies stored in omx file
     if output_type == ".omx":
         with omx.open_file(omx_output_path, "r") as f:
             print(f"The following matricies were created and stored in {omx_output_path}")

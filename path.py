@@ -119,7 +119,7 @@ def single_source_shortest_path(G, orig_node_id, cost_type):
         _prev_cost_type = cost_type
 
     orig_node_no = G.get_node_no(orig_node_id)
-    _optimal_label_correcting_CAPI(G, orig_node_no)
+    _optimal_label_correcting_CAPI(G, orig_node_no) # Calls and runs the C++ engine to compute travel times. 
                         
 
 def output_path_sequence(G, to_node_id, type='node'):
@@ -176,6 +176,20 @@ def find_shortest_path(G, from_node_id, to_node_id, seq_type, cost_type):
 
 
 def get_shortest_path(G, from_node_id, to_node_id, cost_type):
+    """
+    Args:
+        G (_type_): Netowrk loaded in from read_network in io.py
+        from_node_id (_type_): origin node
+        to_node_id (_type_): destination node
+        cost_type (_type_): either time (minutes) or distance (miles)
+
+    Raises:
+        Exception: If the from node id is not in found in the network
+        Exception: If the to node id is not found in the network
+
+    Returns:
+        _type_: Path cost as integer (dependent on cost type) from one node to another
+    """
     # exceptions
     if from_node_id not in G.map_id_to_no:
         #return None
@@ -184,25 +198,28 @@ def get_shortest_path(G, from_node_id, to_node_id, cost_type):
         #return None
         raise Exception(f'Node ID: {to_node_id} not in the network')
     
+    #Calls engine to compute distance from the from_node to every other node in network
     single_source_shortest_path(G, from_node_id, cost_type)
     
+    #Returns requested cost to the to_node
     path_cost = G.get_path_cost(to_node_id, cost_type)
   
     if path_cost >= MAX_LABEL_COST:
-        return 9999999
+        return 9999999 #If no path is found
     else:
        return path_cost
 
+# Runs get shortest path for every path
 def compute_row_distances(G, row_node, row_nodes, cost_type):
     return [get_shortest_path(G, row_node, col_node, cost_type) for col_node in row_nodes]
 
-
+# Creates matrix
 def create_numpy_matrix_parallel(G, row_nodes, cost_type):
     """
     Creates a shortest path distance matrix using parallel processing.
 
     Parameters:
-        nodes (np.ndarray): Array of all node IDs.
+        nodes (np.ndarray): Array of all centroid node IDs in network.
         network: The loaded network object.
 
     Returns:
@@ -212,7 +229,7 @@ def create_numpy_matrix_parallel(G, row_nodes, cost_type):
 
     # Use joblib with tqdm for parallel computation
     skim_matrix = Parallel(n_jobs=-1)(
-        delayed(compute_row_distances)(G, row_node, row_nodes, cost_type)  # Corrected function call
+        delayed(compute_row_distances)(G, row_node, row_nodes, cost_type) 
         for row_node in tqdm(row_nodes, desc="Computing shortest paths"))
     
     elapsed_time = time.time() - start_time
@@ -262,31 +279,36 @@ def find_shortest_path_network(G, output_dir, output_type, cost_type, mode):
     if output_type not in valid_types:
         raise ValueError(f"Error: Unsupported output type '{output_type}'. Please use one of {valid_types}.")
     
-    print(mode.type)
     # Will compute skim for centroids only, checking the zone_id column for nonempty.
     row_nodes = [G.nodes[i].zone_id for i in range(G.node_size) if G.nodes[i].zone_id and G.nodes[i].zone_id.strip().isdigit()]
 
     # Modify the free flow travel time of link if mode is not all or auto.
-    if mode.type == "p":
+    if mode.type == "p": #Pedestrian
         for i in range(G.link_size):
             G.links[i].fftt = (G.links[i].length * 5280)/mode.ffs /60 #Convert fftt for walking
-    if mode.type == "t":
+    if mode.type == "t": #Transit
         for i in range(G.link_size):
             if "p" in G.links[i].allowed_uses: #Convert fftt on pedestrain links only, not transit. 
                 G.links[i].fftt = (G.links[i].length * 5280)/mode.ffs /60 
-    elif mode.type == "b":
+    elif mode.type == "b": #Biking
         for i in range(G.link_size):
             G.links[i].fftt = G.links[i].length / mode.ffs * 60 #Convert fftt for biking
     
     
-    # Compute shortest path matrix in parallel
+    # Compute shortest path matrix using parallel processing for faster runtime
     skim_matrix = create_numpy_matrix_parallel(G, row_nodes, cost_type)
+    
+    #Sets units for attributes depending on cost_type
+    if cost_type == "time":
+        cost_units = "minutes",
+    elif cost_type == "distance":
+        cost_units = "miles (km if metric)"
     
     #Assign attributes to the matrix
     matrix_attributes = {
     "Description": f"Shortest path travel time matrix for {mode.name}",
     "mode": mode.name,
-    "Units": "minutes",
+    "Units": cost_units,
     "Date": datetime.now().date(),
     "time": datetime.now().time(),
     "Calculation_Method": "Dijkstra Algorithm "
@@ -306,6 +328,7 @@ def find_shortest_path_network(G, output_dir, output_type, cost_type, mode):
         save_to_omx(skim_matrix, row_nodes, output_path, f"{mode.name}", matrix_attributes)
     else:
         raise ValueError(f"Error: Unsupported output type '{output_type}'. Please use one of ['.csv', '.omx'].")
+
 
 def find_path_for_agents(G, column_pool, engine_type='c'):
     """ find and set up shortest path for each agent
