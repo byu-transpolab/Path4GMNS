@@ -148,6 +148,8 @@ def read_links(input_dir,
             if mode not in allowed_uses:
                 if mode == "t" and "p" in allowed_uses:
                     pass  # Continue processing this case, so that p links are in the transit network.
+                elif mode == "all":
+                    pass
                 else:
                     continue
             
@@ -769,6 +771,8 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.', mode="all"
     len_units = ['kilometer', 'km', 'meter', 'm', 'mile', 'mi']
     spd_units = ['kmh', 'kph', 'mph']
     
+    mode = mode
+    
     # length and speed units check
     # linear search is OK for such small lists
     if length_unit not in len_units:
@@ -810,7 +814,7 @@ def read_network(length_unit='mile', speed_unit='mph', input_dir='.', mode="all"
                load_demand)
 
     network.update()
-    assignm.network = network  ######## Assigning of the network
+    assignm.network = network
 
     return UI(assignm)
 

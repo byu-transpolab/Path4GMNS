@@ -1526,21 +1526,21 @@ class Assignment:
 
         find_path_for_agents(self.network, self.column_pool)
 
-    def find_shortest_path(self, from_node_id, to_node_id, mode, seq_type, cost_type):
+    def find_shortest_path(self, from_node_id, to_node_id, seq_type, cost_type):
         """ call find_shortest_path() from path.py
 
         exceptions will be handled in find_shortest_path()
         """
         # reset agent type str or mode according to user's input
-        at_name, _ = self._convert_mode(mode)
-        self.network.set_agent_type_name(at_name)
+        #at_name, _ = self._convert_mode(mode)
+        #self.network.set_agent_type_name(at_name)
 
         # add backward compatibility in case the user still use integer node id's
         from_node_id = str(from_node_id)
         to_node_id = str(to_node_id)
 
         return find_shortest_path(self.network, from_node_id,
-                                  to_node_id, mode, seq_type, cost_type)
+                                  to_node_id, seq_type, cost_type)
         
     def get_shortest_path_tree(self, from_node_id, cost_type, mode):
         # reset agent type str or mode according to user's input
