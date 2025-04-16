@@ -603,6 +603,9 @@ def _auto_setup(assignment):
 
 
 def create_settings(input_dir):
+    # Looks in folder 
+    input_dir = os.path.dirname(input_dir)
+    
     import yaml as ym
     file_path = os.path.join(input_dir, "settings.yml")
     csv_path = os.path.join(input_dir, "use_group.csv")
@@ -611,7 +614,7 @@ def create_settings(input_dir):
         print(f"settings.yml found")
         return
     
-    print(f"settings.yml missing from input_dir. Creating setting.yml")
+    print(f"settings.yml missing from {input_dir}. Creating setting.yml")
     settings = {"agents": []}
     
     with open(csv_path, newline='') as csvfile:
@@ -640,9 +643,15 @@ def read_settings(input_dir, assignment):
     try:
         import yaml as ym
         
-        create_settings(input_dir) #Create setting file using use_group is none already exists. 
+        create_settings(input_dir) #Create setting file using use_group is none already exists.
         
-        with open(input_dir+'/settings.yml') as file:
+        # Check if settings.yml exists in input_dir, otherwise read setting in patent file
+        settings_path = os.path.join(input_dir, 'settings.yml')
+        if not os.path.isfile(settings_path):
+            input_dir = os.path.dirname(input_dir) # Set input_dir to parent file.
+            settings_path = os.path.join(input_dir, 'settings.yml') # Read setting in parent file 
+        
+        with open(settings_path) as file:
             print('read settings.yml\n')
 
             settings = ym.full_load(file)
@@ -824,12 +833,22 @@ def run_skim_network(length_unit='mile', speed_unit = 'mph', network_dir = '.', 
     #Create mode agents for use_group file
     read_settings(network_dir, assignm) 
     
+    
+    
+    ''' This needs to be revised to work with the running of hwy and transit seperate
+    
     # Removes existing omx matrix 
     omx_output_path = f"skims/shortest_path_matrix_{cost_type}.omx"
     if output_type == ".omx" and os.path.exists(omx_output_path):
         os.remove(omx_output_path)
         print(f"Existing OMX file '{omx_output_path}' deleted. New one will be created")
+    '''
     
+    # Ends program is no agents are read from settings. 
+    if assignm.agent_types == None:
+        print("No modes/agents read. Check use_group/settings.yml and their save locations.")
+        return
+        
     # Computes network skim for every mode given in use_group file
     for i in range(len(assignm.agent_types)-1): # -1 removed automatically added "auto" type
         
@@ -894,10 +913,12 @@ def run_skim_network(length_unit='mile', speed_unit = 'mph', network_dir = '.', 
         UI(assignm).find_shortest_path_network(output_dir, output_type, cost_type, mode)
     
     #Returns list of created matricies stored in omx file
+    
     if output_type == ".omx":
         with omx.open_file(omx_output_path, "r") as f:
             print(f"The following matricies were created and stored in {omx_output_path}")
             print(f.list_matrices())
+    
     
 
 def load_columns(ui, input_dir='.'):
